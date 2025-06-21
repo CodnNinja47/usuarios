@@ -1,95 +1,86 @@
 import requests
 from bs4 import BeautifulSoup
-import json
-from urllib.parse import quote
-from typing import Dict, List, Optional
+import urllib.parse
+import concurrent.futures
+from typing import Dict, Union, List
 
-class UserSearchEngine:
-    def __init__(self):
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9'
-        }
-        self.platforms = {
-            'github': {
-                'url': 'https://github.com/{}',
-                'validation': lambda soup: not soup.find('div', class_='js-profile-editable-replace')
-            },
-            'twitter': {
-                'url': 'https://twitter.com/{}',
-                'validation': lambda soup: soup.find('div', {'data-testid': 'emptyState'}) is not None
-            },
-            'instagram': {
-                'url': 'https://www.instagram.com/{}/',
-                'validation': lambda soup: 'Sorry, this page isn\'t available.' in str(soup)
-            },
-            'reddit': {
-                'url': 'https://www.reddit.com/user/{}',
-                'validation': lambda soup: 'Sorry, nobody on Reddit goes by that name.' in str(soup)
-            }
-        }
-    
-    def _check_platform(self, username: str, platform: str) -> Dict[str, str]:
-        """Verifica si un usuario existe en una plataforma específica."""
-        platform_data = self.platforms.get(platform)
-        if not platform_data:
-            return {'platform': platform, 'exists': False, 'error': 'Platform not supported'}
-        
-        try:
-            url = platform_data['url'].format(quote(username))
-            response = requests.get(url, headers=self.headers, timeout=10)
-            
-            if response.status_code == 404:
-                return {'platform': platform, 'exists': False, 'url': url}
-            
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            if platform_data['validation'](soup):
-                return {'platform': platform, 'exists': False, 'url': url}
-            
-            return {'platform': platform, 'exists': True, 'url': url}
-        
-        except Exception as e:
-            return {'platform': platform, 'exists': False, 'error': str(e), 'url': url}
+def generar_dork_url(dork: str) -> str:
+    """Genera la URL de búsqueda para un dork dado"""
+    query = urllib.parse.quote_plus(dork)
+    return f"https://html.duckduckgo.com/html/?q={query}"
 
-def buscar(usuario: str) -> Dict[str, List[Dict[str, str]]]:
-    """
-    Busca un nombre de usuario en múltiples plataformas.
+def extraer_links(soup: BeautifulSoup, usuario: str, max_results: int = 5) -> Union[List[str], str]:
+    """Extrae y filtra los links relevantes de los resultados de búsqueda"""
+    links = soup.find_all('a', class_='result__url')
+    encontrados = []
     
-    Args:
-        usuario (str): Nombre de usuario a buscar
-        
-    Returns:
-        Dict: Diccionario con los resultados por plataforma
-        Ejemplo:
-        {
-            "username": "ejemplo",
-            "results": [
-                {"platform": "github", "exists": True, "url": "https://github.com/ejemplo"},
-                {"platform": "twitter", "exists": False, "url": "https://twitter.com/ejemplo"}
-            ],
-            "stats": {
-                "total": 4,
-                "found": 1,
-                "not_found": 3
-            }
+    for link in links[:max_results]:  # Limitar resultados desde el inicio
+        href = link.get('href', '')
+        if usuario.lower() in href.lower() or usuario.lower() in link.text.lower():
+            encontrados.append(href)
+    
+    return encontrados if encontrados else "No se encontraron resultados"
+
+def buscar_en_plataforma(plataforma: str, dork: str, usuario: str) -> Dict[str, Union[List[str], str]]:
+    """Realiza la búsqueda para una plataforma individual"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
-    """
-    engine = UserSearchEngine()
-    results = []
+        
+        url = generar_dork_url(dork)
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        return {plataforma: extraer_links(soup, usuario)}
+        
+    except requests.exceptions.Timeout:
+        return {plataforma: "Error: Tiempo de espera agotado"}
+    except Exception as e:
+        return {plataforma: f"Error en la búsqueda: {str(e)}"}
+
+def buscar(usuario: str) -> Dict[str, Union[str, Dict]]:
+    """Función principal que busca un usuario en múltiples plataformas"""
+    plataformas = {
+        'GitHub': f'site:github.com "{usuario}"',
+        'Twitter': f'site:twitter.com "{usuario}"',
+        'Instagram': f'site:instagram.com "{usuario}"',
+        'Facebook': f'site:facebook.com "{usuario}"',
+        'LinkedIn': f'site:linkedin.com "{usuario}"',
+        'Reddit': f'site:reddit.com "{usuario}"',
+        'YouTube': f'site:youtube.com "{usuario}"',
+        'Pinterest': f'site:pinterest.com "{usuario}"',
+        'TikTok': f'site:tiktok.com "@{usuario}"',
+        'Twitch': f'site:twitch.tv "{usuario}"',
+        'Telegram': f'site:t.me "{usuario}"',
+        'Medium': f'site:medium.com "@{usuario}"',
+        'Dev.to': f'site:dev.to "{usuario}"',
+        'Flickr': f'site:flickr.com "{usuario}"'
+    }
     
-    for platform in engine.platforms:
-        result = engine._check_platform(usuario, platform)
-        results.append(result)
+    resultados = {}
     
+    # Búsqueda paralela
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [
+            executor.submit(buscar_en_plataforma, plataforma, dork, usuario)
+            for plataforma, dork in plataformas.items()
+        ]
+        
+        for future in concurrent.futures.as_completed(futures):
+            resultados.update(future.result())
+    
+    # Calcular estadísticas
     stats = {
-        'total': len(results),
-        'found': sum(1 for r in results if r['exists']),
-        'not_found': sum(1 for r in results if not r['exists'])
+        "total_platforms": len(plataformas),
+        "total_found": sum(1 for v in resultados.values() if isinstance(v, list)),
+        "total_errors": sum(1 for v in resultados.values() if isinstance(v, str) and "Error" in v),
+        "total_not_found": sum(1 for v in resultados.values() if v == "No se encontraron resultados")
     }
     
     return {
-        'username': usuario,
-        'results': results,
-        'stats': stats
+        "username": usuario,
+        "results": resultados,
+        "stats": stats
     }
