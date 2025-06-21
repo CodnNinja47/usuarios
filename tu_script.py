@@ -95,7 +95,8 @@ def search_duckduckgo(query):
         for result in soup.find_all('div', class_='result', limit=MAX_RESULTS):
             title = result.find('a', class_='result__a').get_text(strip=True)
             link = parse_ddg_link(result.find('a', class_='result__a')['href'])
-            if link:
+            
+            if link and not link.startswith('https://duckduckgo.com'):
                 results.append({
                     "title": title,
                     "url": link,
@@ -109,10 +110,24 @@ def search_duckduckgo(query):
         return []
 
 def parse_ddg_link(link):
-    """Parse DuckDuckGo redirect links"""
-    if link.startswith('/url?q='):
-        link = link[7:].split('&')[0]
-    return link
+    """Parse DuckDuckGo redirect links to get the final URL"""
+    if link.startswith('//'):
+        link = 'https:' + link
+        
+    if link.startswith('/l/?uddg='):
+        # Extraer la URL codificada
+        match = re.search(r'/l/\?uddg=(.*?)(?:&|$)', link)
+        if match:
+            link = unquote(match.group(1))
+        else:
+            return None
+    
+    # Limpiar parámetros de tracking comunes
+    clean_link = re.sub(r'(&|\?)utm_[^&]+', '', link)
+    clean_link = re.sub(r'(&|\?)fbclid=[^&]+', '', clean_link)
+    clean_link = re.sub(r'(&|\?)ref=[^&]+', '', clean_link)
+    
+    return clean_link.split('&')[0].split('?')[0]
 
 def classify_results(results):
     """Classify results by platform"""
