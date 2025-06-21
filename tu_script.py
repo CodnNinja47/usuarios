@@ -1,108 +1,152 @@
 import requests
-import urllib.parse
-import concurrent.futures
+from bs4 import BeautifulSoup
 import random
-import time
-from typing import Dict, Union, List
+from urllib.parse import quote_plus
+import hashlib
+import datetime
 
-def generar_dork(dork: str) -> str:
-    """Genera el query de búsqueda para la API"""
-    return urllib.parse.quote_plus(dork)
+# Configuration
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 9) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/122.0.6261.140 DuckDuckGo/5 Safari/537.36"
+]
 
-def buscar_en_plataforma(plataforma: str, dork: str, usuario: str) -> Dict[str, Union[List[str], str]]:
-    """Realiza la búsqueda para una plataforma individual usando la API de DuckDuckGo"""
-    try:
-        # Configuración avanzada de headers
-        user_agents = [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1'
-        ]
-        
-        headers = {
-            'User-Agent': random.choice(user_agents),
-            'Accept': 'application/json',
-            'Accept-Language': 'es-ES,es;q=0.9',
-            'Referer': 'https://duckduckgo.com/',
-            'DNT': '1'
-        }
-        
-        # Pequeño delay aleatorio para evitar bloqueos
-        time.sleep(random.uniform(0.5, 1.5))
-        
-        # Usar la API oficial de DuckDuckGo en lugar de scraping HTML
-        api_url = f"https://api.duckduckgo.com/?q={generar_dork(dork)}&format=json&no_html=1&skip_disambig=1"
-        
-        response = requests.get(api_url, headers=headers, timeout=10)
-        response.raise_for_status()
-        
-        data = response.json()
-        
-        # Procesar resultados de la API
-        resultados = []
-        if 'Results' in data and data['Results']:
-            for result in data['Results']:
-                if usuario.lower() in result['FirstURL'].lower():
-                    resultados.append(result['FirstURL'])
-        
-        # También verificar en RelatedTopics si existen
-        if 'RelatedTopics' in data and data['RelatedTopics']:
-            for topic in data['RelatedTopics']:
-                if 'FirstURL' in topic and usuario.lower() in topic['FirstURL'].lower():
-                    resultados.append(topic['FirstURL'])
-        
-        return {plataforma: resultados if resultados else "No se encontraron resultados"}
-        
-    except requests.exceptions.Timeout:
-        return {plataforma: "Error: Tiempo de espera agotado"}
-    except requests.exceptions.HTTPError as e:
-        return {plataforma: f"Error HTTP: {str(e)}"}
-    except Exception as e:
-        return {plataforma: f"Error en la búsqueda: {str(e)}"}
+PLATFORMS = {
+    "Facebook": ["facebook.com", "fb.com"],
+    "YouTube": ["youtube.com", "youtu.be"],
+    "Instagram": ["instagram.com"],
+    "TikTok": ["tiktok.com"],
+    "GitHub": ["github.com"],
+    "Telegram": ["t.me", "telegram.org"],
+    "Twitter": ["twitter.com", "x.com"],
+    "Reddit": ["reddit.com"],
+    "LinkedIn": ["linkedin.com"],
+    "Pinterest": ["pinterest.com"],
+    "Snapchat": ["snapchat.com"],
+    "Twitch": ["twitch.tv"],
+    "Steam": ["steamcommunity.com", "steampowered.com"],
+    "DeviantArt": ["deviantart.com"],
+    "Medium": ["medium.com"],
+    "Flickr": ["flickr.com"]
+}
 
-def buscar(usuario: str) -> Dict[str, Union[str, Dict]]:
-    """Función principal que busca un usuario en múltiples plataformas"""
-    plataformas = {
-        'GitHub': f'site:github.com "{usuario}"',
-        'Twitter': f'site:twitter.com "{usuario}"',
-        'Instagram': f'site:instagram.com "{usuario}"',
-        'Facebook': f'site:facebook.com "{usuario}"',
-        'LinkedIn': f'site:linkedin.com "{usuario}"',
-        'Reddit': f'site:reddit.com "{usuario}"',
-        'YouTube': f'site:youtube.com "{usuario}"',
-        'Pinterest': f'site:pinterest.com "{usuario}"',
-        'TikTok': f'site:tiktok.com "@{usuario}"',
-        'Twitch': f'site:twitch.tv "{usuario}"',
-        'Telegram': f'site:t.me "{usuario}"',
-        'Medium': f'site:medium.com "@{usuario}"',
-        'Dev.to': f'site:dev.to "{usuario}"',
-        'Flickr': f'site:flickr.com "{usuario}"'
-    }
+TIMEOUT = 15
+MAX_RESULTS = 30
+
+def buscar(usuario):
+    """Main search function that takes a username and returns search results"""
+    variations = generate_username_variations(usuario)
+    all_results = []
     
-    resultados = {}
+    for variation in variations:
+        results = search_duckduckgo(variation)
+        all_results.extend(results)
     
-    # Búsqueda paralela con límite de workers
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        futures = []
-        for i, (plataforma, dork) in enumerate(plataformas.items()):
-            futures.append(executor.submit(buscar_en_plataforma, plataforma, dork, usuario))
-            # Pequeña pausa cada 3 solicitudes para evitar bloqueos
-            if i % 3 == 0:
-                time.sleep(random.uniform(1, 2))
-        
-        for future in concurrent.futures.as_completed(futures):
-            resultados.update(future.result())
-    
-    # Calcular estadísticas
-    stats = {
-        "total_platforms": len(plataformas),
-        "total_found": sum(1 for v in resultados.values() if isinstance(v, list) and v),
-        "total_errors": sum(1 for v in resultados.values() if isinstance(v, str) and "Error" in v),
-        "total_not_found": sum(1 for v in resultados.values() if v == "No se encontraron resultados")
-    }
+    classified = classify_results(all_results)
+    classified = remove_duplicates(classified)
     
     return {
         "username": usuario,
-        "results": resultados,
-        "stats": stats
+        "date": datetime.datetime.now().isoformat(),
+        "variations": variations,
+        "results": classified
     }
+
+def generate_username_variations(username):
+    """Generate different username variations for more comprehensive searching"""
+    variations = {
+        username,
+        username.replace(' ', ''),
+        username.replace(' ', '_'),
+        username.replace(' ', '.'),
+        username.replace(' ', '-'),
+        f"{username}_",
+        f"{username}-",
+        f"{username}.",
+        f"{username}1",
+        f"{username}123",
+        f"{username}2023",
+        f"{username}2024",
+        username.replace('a', '4').replace('e', '3').replace('i', '1').replace('o', '0'),
+        username.lower(),
+        username.upper(),
+        username.title(),
+        username[::-1],  # reversed
+        f"real{username}",
+        f"official{username}",
+        f"the{username}",
+        f"{username}official"
+    }
+    return [v for v in variations if v and len(v) <= 30]
+
+def search_duckduckgo(query):
+    """Perform actual search using DuckDuckGo dorks"""
+    session = requests.Session()
+    session.headers.update({'User-Agent': random.choice(USER_AGENTS)})
+    
+    try:
+        url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
+        response = session.get(url, timeout=TIMEOUT)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        results = []
+        
+        for result in soup.find_all('div', class_='result', limit=MAX_RESULTS):
+            title = result.find('a', class_='result__a').get_text(strip=True)
+            link = parse_ddg_link(result.find('a', class_='result__a')['href'])
+            if link:
+                results.append({
+                    "title": title,
+                    "url": link,
+                    "variation": query,
+                    "hash": create_result_hash(title, link)
+                })
+        
+        return results
+    except Exception as e:
+        print(f"Error searching for {query}: {str(e)}")
+        return []
+
+def parse_ddg_link(link):
+    """Parse DuckDuckGo redirect links"""
+    if link.startswith('/url?q='):
+        link = link[7:].split('&')[0]
+    return link
+
+def classify_results(results):
+    """Classify results by platform"""
+    classification = {platform: [] for platform in PLATFORMS}
+    classification["Others"] = []
+    
+    for result in results:
+        url = result["url"].lower()
+        found = False
+        
+        for platform, domains in PLATFORMS.items():
+            if any(domain.lower() in url for domain in domains):
+                classification[platform].append(result)
+                found = True
+                break
+        
+        if not found:
+            classification["Others"].append(result)
+    
+    return classification
+
+def remove_duplicates(classified_results):
+    """Remove duplicate results based on URL/title hash"""
+    unique_results = {platform: [] for platform in classified_results}
+    seen_hashes = set()
+    
+    for platform, results in classified_results.items():
+        for result in results:
+            if result["hash"] not in seen_hashes:
+                unique_results[platform].append(result)
+                seen_hashes.add(result["hash"])
+    
+    return unique_results
+
+def create_result_hash(title, url):
+    """Create unique hash for a result to identify duplicates"""
+    return hashlib.md5(f"{title}{url}".encode()).hexdigest()
